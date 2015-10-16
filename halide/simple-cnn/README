@@ -1,0 +1,12 @@
+There are two executables generated, "generate_cnn" and "run_cnn".
+
+"generate_cnn" can be built with the command "make".
+When you run this executable, it will use Halide's compile_to_file
+feature to create "Compiled_Pipeline.h" and "Compiled_Pipeline.o".
+
+After the generated files are available, "run_cnn" can be built
+with the command "make run". This links the generated pipeline
+to a wrapper application.
+
+The code to generate the cnn is in "cnn.cpp".
+The code to run the pipeline is in "main.cpp".

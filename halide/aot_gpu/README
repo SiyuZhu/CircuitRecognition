@@ -1,0 +1,13 @@
+ A simple example of Halide using the GPU, more information is presented at
+the Halide repository tutorials.
+
+It's a simple convolution example that can be compiled for CUDA, OpenCL and
+CPU, the default feature is OpenCL.
+
+To generate the Halide function just type 'make' or 'make <gen_cuda|gen_cpu>',
+to generate the program type 'make <opencl|cuda|cpu>'.
+
+If you need to see the API calls made during execution set the variable HDEBUG
+during the pipeline compilation to 'HDEBUG=-D__PIPEDEBUG__'.
+
+NOTE: must supply png image

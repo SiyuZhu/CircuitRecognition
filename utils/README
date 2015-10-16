@@ -1,0 +1,5 @@
+utils
+=====
+This directory contains utility code which would be useful for both Halide and C++/OpenCV programs. Halide-only utils should go under the Halide directory.
+
+

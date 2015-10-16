@@ -1,0 +1,18 @@
+halide
+======
+This directory contains programs created using Halide
+
+  * batch-lenet - runs the a classifier using the lenet architecture
+  * convolution2d - test program to illustrate how to do convolutions using RDom
+  * simple-cnn - CNN using the LeNet architecture for classifying MNIST digits
+  * aot_gpu - test program to illustrate how to compile ahead of time using GPU
+  * kernel_exec - exemplifies the kernel and host code executed by Halide when running aot_gpu
+
+batch-lenet
+===========
+The code to generate each of the layers are provided. Program mnist_cnn should aot compile an
+mnist pipeline (parameters may have to first be extracted and stored in the associated project
+folder in the data directory. for ease, there is compressed file containing some parameters in
+the mnist project folder of the data directory). aot_test and aot_time can be used to test
+and time with the resulting output. jit_time can be used to time the classification time for a
+jit-compiled pipeline.

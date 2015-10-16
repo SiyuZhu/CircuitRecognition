@@ -1,0 +1,14 @@
+If this file is compiled together with Halide it will override Halide's runtime
+functions.
+
+To use it first create a complete Halide program with AoT compilation but when
+compiling the C++ part of the code link the runtime.c file and it will override
+the normal behavior of the runtime. When executing the generated program it will
+create a OpenCL C and a kernel that can be executed without Halide.
+
+For example, using the aot_gpu we compile the pipeline normaly but when
+compiling the c++ code that calls the Halide function we add:
+
+	g++ gpu.cpp pipe_gen.o ../runtime/runtime.c -o ./gpu_run
+
+NOTE: It was tested with a new version of Halide (07/15/15)

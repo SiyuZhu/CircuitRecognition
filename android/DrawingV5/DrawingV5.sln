@@ -1,0 +1,17 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 11.00
+# Visual Studio 2010
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DrawingV5", "DrawingV5.csproj", "{89496603-6A2B-49D4-877D-5DB4039DDEEF}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{89496603-6A2B-49D4-877D-5DB4039DDEEF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{89496603-6A2B-49D4-877D-5DB4039DDEEF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{89496603-6A2B-49D4-877D-5DB4039DDEEF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{89496603-6A2B-49D4-877D-5DB4039DDEEF}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

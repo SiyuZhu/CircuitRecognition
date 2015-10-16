@@ -1,0 +1,14 @@
+﻿<Properties StartupItem="DrawingV5.csproj">
+  <MonoDevelop.Ide.Workspace ActiveConfiguration="Debug" PreferredExecutionTarget="Android.5da804d006a67186" />
+  <MonoDevelop.Ide.Workbench ActiveDocument="MainActivity.cs">
+    <Files>
+      <File FileName="MainActivity.cs" Line="86" Column="71" />
+      <File FileName="Properties/AndroidManifest.xml" Line="7" Column="12" />
+    </Files>
+  </MonoDevelop.Ide.Workbench>
+  <MonoDevelop.Ide.DebuggingService.Breakpoints>
+    <BreakpointStore />
+  </MonoDevelop.Ide.DebuggingService.Breakpoints>
+  <MonoDevelop.Ide.DebuggingService.PinnedWatches />
+  <MonoDevelop.Ide.ItemProperties.DrawingV5 AndroidDesignerPreferredDevice="Nexus 4" />
+</Properties>

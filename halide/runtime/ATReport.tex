@@ -1,0 +1,723 @@
+%TODO: Style all codes
+
+\documentclass[11pt, a4paper]{article}
+
+\usepackage{graphicx} %Provide image insertion in the document
+\usepackage{wrapfig} %Provide more options for figure placements
+\usepackage{float} 
+\usepackage{listings} %Provide code insertion in the document
+\usepackage{lstlinebgrd} %Provide highlight for code lines
+\usepackage{color} %Provide color for the text
+\usepackage [autostyle, english = american]{csquotes} %Fix double quotes directions
+\usepackage[font={small,it}]{caption}
+\usepackage[backend=bibtex]{biblatex}
+\usepackage{expl3,xparse} %macro definitions
+
+%Check if lines are in the argument if they are set background color as yellow
+%else light grey
+\ExplSyntaxOn
+\NewDocumentCommand \lsth { O{yellow} m }
+{
+	\clist_if_in:nVTF { #2 } { \the\value{lstnumber} } { \color{#1} } { \color{lightgrey} }
+}
+\ExplSyntaxOff
+
+\bibliography{ATReport}
+
+\MakeOuterQuote{"} %Fix double quotes
+\graphicspath{ {images/} } %Specify the path for images
+
+\definecolor{ashgrey}{rgb}{0.7, 0.75, 0.71}
+\definecolor{lightgrey}{rgb}{0.8, 0.8, 0.8}
+\definecolor{darkgreen}{rgb}{0.0, 0.5, 0.0}
+
+\newcommand{\lstsetclang}{\lstset{escapeinside={(*@}{@*)},basicstyle=\tiny, commentstyle=\color{blue}, stringstyle=\color{red}, backgroundcolor=\color{lightgrey}, numbers=left, tabsize=2, keywordstyle=\color{darkgreen}, showstringspaces=false, language=[11]C++, breaklines=true, postbreak=\raisebox{0ex}[0ex][0ex]{\ensuremath{\color{blue}\hookrightarrow\space}}}}
+\newcommand{\lstsetmake}{\lstset{basicstyle=\tiny, commentstyle=\color{blue}, stringstyle=\color{red}, backgroundcolor=\color{lightgrey}, numbers=none, tabsize=2, keywordstyle=\color{darkgreen}, showstringspaces=false, language=make, breaklines=true, postbreak=\raisebox{0ex}[0ex][0ex]{\ensuremath{\color{blue}\hookrightarrow\space}}}}
+\newcommand{\lstsetshell}{\lstset{basicstyle=\tiny, commentstyle=\color{blue}, stringstyle=\color{red}, backgroundcolor=\color{lightgrey}, numbers=none, tabsize=2, keywordstyle=\color{darkgreen}, showstringspaces=false, language=sh, breaklines=true, postbreak=\raisebox{0ex}[0ex][0ex]{\ensuremath{\color{blue}\hookrightarrow\space}}}}
+\newcommand{\bold}[1]{\textbf{#1}} %Create a bold command to print words in bold
+
+\title{Tampering with OpenCL C backend in Halide}
+\date{\today}
+\author{Victor Accarini}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+
+Halide is a Domain Specific Language (DSL) for image processing and has a special
+feature that makes it a really powerful tool, with Halide it is possible to split
+the algorithm of a program from its execution/schedule, with this you can write
+a program one time and if you want to change how and when to compute each value
+or stage you just need a new schedule, furthermore halide can generate code for several
+architectures including OpenCL and CUDA which makes testing different approaches
+and how it performs in different environments easier. In this tutorial we will
+cover how to create a function, define a schedule and use GPU to run a program,
+after that we will talk about Halide code generation, compiling for platforms
+not supported by Halide, its limitations and how to overcome them to improve
+its code generation abilities.
+
+\section{Creating a function}
+
+\subsection{Environment}
+
+Before anything is done we need to download, install and configure our environment
+to use Halide, make sure you have a C++11 compiler installed in your system,
+so let's get the latest Halide version from the git repository
+\cite{website:halide_rep}:
+\lstsetshell
+\begin{lstlisting}
+git clone https://github.com/halide/Halide
+\end{lstlisting}
+
+The program doesn't take much space in hard drive so it will probably be a
+fast download, with the repository now in hands we type:
+\begin{lstlisting}
+cd Halide
+make
+\end{lstlisting}
+
+When all the compilation is done we will have a few new folders, like `bin',
+`build' and `include', now we just need to set the environment variables to them:
+
+\begin{lstlisting}
+HALIDE="Halide Folder"
+HALIDE_BIN=$HALIDE/bin
+HALIDE_INC=$HALIDE/include
+export LIBRARY_PATH=$HALIDE_BIN:$LIBRARY_PATH
+export LD_LIBRARY_PATH=$HALIDE_BIN:$LD_LIBRARY_PATH
+export CPATH=$HALIDE_INC:$CPATH
+\end{lstlisting}
+
+With this we have everything that we need to start using Halide.
+
+\subsection{First Program}
+
+First we will create a simple function using Just-in-Time compilation. In
+this example we take an image and apply a blur filter in it:
+\lstsetclang
+\begin{lstlisting}[caption={halide\_blur.cpp}]
+Func blur("blur");
+Var x("x"), y("y"), c("c");
+
+blur(x,y,c) = 
+(input(x-1,y-1,c) + input(x,y-1,c) + input(x+1,y-1,c)
++ input(x-1,y,c) + input(x,y,c) + input(x+1,y,c)
++ input(x-1,y+1,c) + input(x,y+1,c) + input(x+1,y+1,c))/9;
+\end{lstlisting}
+
+As we can see Halide is a functional language, we define a function instead
+of explaining step by step how to do something. First we declare the function
+using $Func$ and dimension variables $x$, $y$ and $c$, then we say how each pixel
+in our three dimensional image is defined and that's it! We have the algorithm
+done! But how is this going to be calculated?
+
+\begin{lstlisting}[linebackgroundcolor=\lsth{2}]
+Image<float> output(input.width()-2, input.height()-2, input.channels());
+blur.compute_root();
+output.realize(blur);
+\end{lstlisting}
+
+Let's look just for the second line for a moment, there we have what Halide calls
+$schedule$ by calling this function we are saying that we want to evaluate blur
+by going through each line and computing all pixels in that line until there is
+no more lines to compute and storing the values.
+
+We could also say:
+
+\begin{lstlisting}[linebackgroundcolor=\lsth{2}]
+Image<float> output(input.width()-2, input.height()-2, input.channels());
+blur.parallel(y).vectorize(x,8);
+output.realize(blur);
+\end{lstlisting}
+
+Here we are making the CPU compute each line in parallel and compute 8 pixels in
+those lines at the same time, usually using Single Instruction Multiple Data
+(SIMD) present in some processors. There is a lot more scheduling possibilities
+and tutorials available, for more information look into Halide docs
+\cite{website:halide}.
+
+\begin{wrapfigure}{hr}{0.35\textwidth}
+\includegraphics[width=0.35\textwidth]{blur_algorithm}
+\caption{Blur algorithm accessing out of bounds data.}
+\label{fig:blur_algorithm}
+\end{wrapfigure}
+
+In the other two lines we have a Halide structure named $Image$ that holds the input
+or output of a function. It is important to note that we have to specify exactly
+how big is our output, if we define our output with bigger boundaries than we need
+when the function is realized it will try to fill all pixels of the output. That
+means if we have an input image with dimensions 100x100 and an output with the
+same dimensions, when the program gets in the first line and column of the output
+it will try to access a pixel in the input that doesn't exist, looking at Figure
+\ref{fig:blur_algorithm} we can see how the blur function evaluates its first
+pixel in the case described above and as you can see it access 5 pixels that
+doesn't exist. There are ways to work with boundaries, one is setting the output
+to start from (1,1) and end before the last column and line.
+
+\lstsetclang
+\begin{lstlisting}
+output.set_min(1,1);
+output.realize(blur);
+\end{listing}
+
+In the last line the $realize$ method tells the compiler to execute the
+function, that means it will generate the appropriate machine code using
+just in time(JIT) compilation and execute it. We can compile the code using:
+
+\lstsetmake
+\begin{lstlisting}
+g++ -g -std=c++11 blur.cpp -o blur -lHalide -lpthread -ldl
+\end{lstlisting}
+
+\section{Output C code}
+
+Sometimes when we create a program we have to define and test very different
+and complex schedules, and sometimes those schedules get so weird that we need
+to actually see what kind of code we are generating, Halide allows us to print
+C code with the same structure that has been compiled, so we can see
+where and which computation are being made, also it's possible to compile and
+execute the output file like any C program and to get it we just need to change
+one line.
+
+Now instead of $realize$ we have:
+\lstsetclang
+\begin{lstlisting}
+blur.compile_to_c("blur_c.cpp", std::vector<Argument>(), "blur");
+\end{lstlisting}
+
+If we compile now, instead of receiving an image as an output we will see that
+a file was generated with C code on it. That file is generated using what
+we are going to call Halide IR which is code generated \bold{by} Halide after
+applying some optimizations, we will get in more depth later on, for now just keep
+in mind that Halide handles code generation in two different ways, one is
+generating it by itself and the other is using LLVM compiler.
+
+\section{Ahead of Time}
+
+Ok, now that we are more familiar with Halide we can start making use of it in
+larger programs. Sometimes we have a really big project that in some parts has
+to do image processing, we can create an object that will handle it and put up
+an interface, so if we want to change the object algorithm we don't need to
+change the code that calls it.
+
+Well luckily Halide handles it for us!
+
+It's possible to define the pipeline of functions that will process the image
+in Halide and compile it to an object targeting the desirable platform like ARM,
+x86, etc. If we do that we will have two files, one object with all the compiled
+code for our function and a header (interface) with a function prototype, so let's
+do it:
+
+\lstinputlisting[caption={blur.cpp},linebackgroundcolor={\ifnum\value{lstnumber}=18\color{yellow}\else\color{lightgrey}\fi},firstline=7,lastline=26]{./codes/blur_aot.cpp}
+
+This is our blur function modified for AoT compilation, as you can see we
+don't have input data just a parameter that we will receive when the function is
+called in another file. Now let's go to our big non-Halide program:
+
+First important thing to note in here is that instead of using the Halide
+library (Halide.h) in Listing\ref{lst:run_aot}, we use the function interface generated.
+
+\lstinputlisting[caption={run.cpp},linebackgroundcolor={\lsth{1,31,44,45,46,56,57,58,63}},label=lst:run_aot]{./codes/run_aot.cpp}
+
+Now we are starting to see some parts inside Halide, first is the $buffer\_t$
+structure also defined in the interface, it's used together with $Image$ to hold the data we
+want to change or information about the image we are going to generate. It has
+information about each dimension of the image, data's memory location and it's
+used to control the copy between CPU and GPU when using OpenCL/CUDA (more
+information in the next section). As we can see the hardest part of
+calling a Halide function is setting up the buffer structures in a way that we
+don't access pixels out of boundaries.
+
+It's also possible to specify a different architecture for the compiled function,
+we can cross-compile for ARM for example, but we will address it in the next
+section, for now let's see how to compile what we have done:
+\lstsetmake
+\lstinputlisting[firstline=8,lastline=10]{./codes/make_aot}
+
+\begin{figure}[H]
+\centering
+\includegraphics[height=3.5cm,width=0.7\textwidth]{aot_compilation}
+\caption{Pipeline compilation and program compilation.}
+\label{fig:aot_compilation}
+\end{figure}
+
+The first command compiles the pipeline/function generator, the second executes
+the generator which will create the Halide object and its interface and the last
+command is our "big" project calling our blur function. Note that the last
+command doesn't make use of the Halide library.
+
+\section{Working with the GPU}
+
+Here is where things start to get interesting, since Halide supports GPGPU languages
+like OpenCL and CUDA we can take a heavy computational load and transfer it to
+the GPU allowing us to make use of heavy parallelism to solve our problems. In
+the next example we will use AoT compilation and GPU scheduling for our function:
+\lstsetclang
+\lstinputlisting[caption={blur.cpp},firstline=19,lastline=26]{./codes/blur_gpu.cpp}
+
+In this example we have two major changes, first a schedule change which
+may look like nothing but it is essential, if we enable the OpenCL feature but
+don't schedule the function correctly it will be calculated into the CPU, second
+we create a $Target$ that will hold information about the platform we are using,
+it can also be modified to compile for a different platform, and will be used to
+set the $Target::OpenCL$ feature. This feature will change Halide compilation to
+create all the OpenCL structure. It's also possible to change the $Target$ for ARM
+or other architectures.
+
+Now let us compile it:
+
+\lstsetmake
+\lstinputlisting[firstline=8,lastline=10]{./codes/make_gpu}
+
+As you can see we only need to add the OpenCL library when compiling.
+
+\section{OpenCL/CUDA}
+
+OpenCL is framework used to create programs that can be executed in heterogeneous
+platforms consisting in different types of processors, like CPUs, GPUs, FPGAs, etc.
+For this reason it would be important to access the code generated by Halide,
+it would allow us to use Halide scheduling in different applications and platforms.
+
+Before going in more depth about working with Halide and OpenCL we need first to
+understand how the program works \cite{website:opencl}, we will create a
+simple example to help us see what Halide has to do when generating code for us.
+
+Before anything be sure that your system has the OpenCL or CUDA library
+installed and the environment variables are properly set. We will begin this section
+explaining that to run an OpenCL program in the GPU we need at least two files, one with
+the program that will be executed in the GPU and another one with all the API
+calls that will be made from the CPU, in the future we will refer to those as
+kernel and host, respectively.
+
+\begin{figure}[H]
+\centering
+\includegraphics[height=4cm,width=\textwidth]{gpu_program}
+\caption{OpenCL program.}
+\label{fig:gpu_program}
+\end{figure}
+
+\subsection{Kernel source}
+
+The kernel source file can have several kernels that will be called from the
+CPU and has two special function calls that return different values for each
+thread or block being executed on the device, allowing different threads to work
+on different parts of the data, for example, we can have an array of 10 elements
+and divide it in 2 threads, the first thread call the special function and receive
+an index of 0 and the other one does the same but receive an index of 1, since
+the data is divided by two `thread0' will work from $0*5$ to $(0*5 + 4)$ and `thread1' from
+$1*5$ to $(1*5 + 4)$.
+
+\begin{wrapfigure}{hl}{0.5\textwidth}
+\vspace{-40pt}
+\centering
+\includegraphics[height=0.45\textheight,width=0.45\textwidth]{gpu_pattern}
+\vspace{-10pt}
+\caption{Execution flow.}
+\vspace{-50pt}
+\label{fig:gpu_pattern}
+\end{wrapfigure}
+
+\subsection{Host source}
+
+The host source file will be responsible to coordinate the execution of the
+kernels and the data transfer from device to host and vice versa, there is
+a pattern of execution that must be followed to ensure that the device is ready
+and the data is correctly allocated.
+
+\subsubsection{Pattern}
+
+It starts getting information about the device and its attributes, creating a
+context (GPU term for process), a command queue that will organize the kernels
+executions and finally compiling the kernel source into a GPU program.
+
+With the device ready is time to allocate space in the GPU memory to perform
+the computations, and transfer input data to the device, it also important to
+have host memory allocated for the output.
+
+Following that we need to set each kernel argument and run the kernel, copy the
+result back and destroy the context and everything in it.
+
+\subsubsection{Example} \label{sec:example}
+
+The following listing is a convolution example \cite{website:aot_gpu} that we created when learning about Halide
+runtime, it follows the same order and does the same API calls \cite{website:opencl_tut}
+that Halide does and it uses a Halide generated kernel (We will explain how to
+access it in the next section), this is just something to exemplify the
+pattern and what we would want to generate automatically in case Halide had
+this backend implemented.
+%\lstsetclang
+%\lstinputlisting[title={kernel.cl},firstline=96]{./codes/kernel.cl}
+\lstsetclang
+\lstinputlisting[caption={host.c},firstline=4]{./codes/host.c}
+
+If you want to see the kernel and play with the code, you will find it in the
+repository \cite{website:kernel_example}, also you can see that since this file
+doesn't use a Halide object we can use it in others platforms even in FPGAs with
+a little help from Picasso/Vivado \cite{website:picasso}.
+
+\subsection{Finding GPU code in Halide}
+
+If you are curious about Halide behavior with GPUs don't worry!
+It's really simple to see what is happening, if you want to see which API calls
+are being made and the sequence in which they are executed all you have to do
+is set $Target::Debug$ as a feature in your target, now every time you execute your
+program, debug information about what is happening at runtime will be show. But
+if you want to see the kernel that Halide creates is a little more tricky you
+will need to set $HL\_DEBUG\_CODEGEN=2$ in your environment during the
+pipeline/function creation and dig through the output generated until you
+find the "OpenCL C" string.
+
+\lstsetclang
+\lstinputlisting[caption={blur.cpp},firstline=19,lastline=27]{./codes/blur_gpu_debug.cpp}
+
+\lstsetmake
+\lstinputlisting[firstline=8,lastline=10]{./codes/make_gpu_debug}
+
+\section{Halide code generation}
+
+%TODO: insert table with terms used
+
+Now we go into Halide code generation.
+We saw that we have two options for compiling and executing: the first is a JIT
+compilation where Halide realizes the function that was created and generate the
+program, if we use this solution it's necessary to compile using the Halide
+library, so all the files are Halide dependent. The second option is the AoT
+compilation and it'll generate a library and a header that the user can integrate
+into another program that doesn't need the Halide library, this compilation can
+target different architectures as well. 
+
+\subsection{Major Architectures}
+
+Now lets see what happens behind the scenes with Halide when we compile AoT.
+Depending on the architecture selected when compiling Halide can behave in
+different ways, if it's one of the "major" architectures, like x86 or ARM, the
+parser tree generated will be visited and will generate a Halide Module
+with all the information about the functions, buffers and any other structure
+used, them this module will be transformed in an LLVM Module that will be compiled
+using the LLVM backend to the specified architecture.
+
+\begin{figure}[H]
+\centering
+\includegraphics[height=4cm,width=\textwidth]{modules}
+\caption{Modules structures.}
+\label{fig:modules}
+\end{figure}
+
+\subsection{Minor architecture or Features}
+
+Halide provides support for OpenCL, CUDA and other similar APIs, but instead of
+providing the user with an actual architecture for those languages, making it
+possible to print out the code if wanted, they treat it like a feature,
+hiding from the user how the code is executed and what API calls are made. This
+is specially bad when we need an OpenCL/CUDA code plus kernel to apply in other
+applications. Also bad because if we wanted to implement a new backend on top
+of the ones that already exists we would have to make major changes in the
+source code.
+
+It's not impossible to see which API calls are made and how Halide handles the
+code but it's "hidden" from the user, you have to change or enable
+several features and debug options to have access to the kernel or see the API calls,
+but changing the kernel or host code directly or printing a code that works
+is impossible for now.
+
+So going back to code generation when we specify a "feature" in our
+function, the Halide code generation behavior changes and we will present how the
+code is handled.
+
+\subsubsection{Kernel}
+Instead of creating a module and passing it to LLVM, it will traverse the parser
+tree and generate a Halide IR that will become the kernel, just like when
+compiling to C, this kernel is stored in a string stream and will be used by LLVM
+in the runtime calls.
+
+\lstsetclang
+\lstinputlisting[caption={CodeGen\_OpenCL\_Dev.cpp},firstline=454,lastline=455]{../../Git/Halide/src/CodeGen_OpenCL_Dev.cpp}
+
+\subsubsection{LLVM}
+With the kernel created, the host file will be generated using LLVM which will
+create several function calls based on information from buffers and
+halide functions previous compiled. Those LLVM functions are specific for each
+feature, for OpenCL we would have a halide\_opencl function calls
+and for the CUDA feature we would have halide\_cuda function calls, that also
+means we have several runtimes, one for each feature, but we will focus only in
+the OpenCL runtime.
+
+\lstinputlisting[caption={CodeGen\_GPU\_Host.cpp},linerange={598-599}]{../../Git/Halide/src/CodeGen_GPU_Host.cpp}
+
+\subsubsection{Runtime}
+The Halide runtime can be found in the Halide source repository
+\cite{website:halide_runtime} inside the
+'runtime' folder. It'll be compiled and added to the object generated in an
+AoT compilation, and the feature specific functions (FSF) defined above will
+be called by the LLVM.
+
+\lstinputlisting[caption={opencl.cpp},linerange={441-441,486-486}]{../../Git/Halide/src/runtime/opencl.cpp}
+
+Each function is defined with a WEAK attribute in its prototype, that is a
+feature from GCC that enables the function to be overridden by another with the
+same signature, making it possible to change how Halide runtime work with the
+kernels.
+
+\begin{figure}[H]
+\centering
+\includegraphics[height=10cm,width=0.6\textwidth]{code_gen}
+\caption{Standard Halide code generation flow for AoT compilation. Halide modules becomes the kernel, LLVM generates the host with several function calls that are defined in the runtime and Halide runtime is compiled with everything else to generate the object.}
+\label{fig:code_gen}
+\end{figure}
+
+\section{Creating our own backend}
+
+As we mentioned it's hard for Halide to give us a working OpenCL C code,
+that means if we want to use Halide scheduling abilities to create a file and
+work in it we will have to change Halide source code or change Halide runtime.
+
+\subsection{Runtime behavior}
+
+For now let's see how the runtime functions works, it's quite similar to what is
+show in Figure \ref{fig:gpu_pattern}, this part will be more text
+than work but we need to understand its behavior before tampering with it.
+
+\subsubsection{halide\_opencl\_initialize\_kernels}
+
+This one is always the first function called in an execution and it's responsible
+for gathering information about the system (How many GPUs and their specifications)
+and initializing a context, a command queue, compiling and building the
+kernel code that is going to be used. 
+
+\subsubsection{halide\_copy\_to\_device}
+
+After the device initialization this function checks if a buffer already exists
+in the device, if not it calls $halide\_opencl\_device\_malloc$ and if it exists
+but the data hasn't been transfered to the GPU it calls 
+$halide\_opencl\_copy\_to\_device$, this function also make several checks and
+validations on the buffer\_t structure. 
+
+\subsubsection{halide\_opencl\_device\_malloc}
+
+This function is called when a buffer\_t structure has the host\_dirty attribute
+marked as true, it allocates memory in the device. The size of a
+buffer\_t data is calculated and an API call to allocate the buffer is made,
+then a wrapper is created containing the address returned and an opencl interface
+and it's stored in the buffer\_t $dev$ attribute. 
+
+\subsubsection{halide\_opencl\_copy\_to\_device}
+
+Here an actual copy of a buffer is made, it uses a simple structure named 
+$device\_copy$ that holds the best way to send data to the device or back.
+It uses an API call to transfer information. 
+
+\subsubsection{halide\_opencl\_run}
+
+It's the only FSF called directly from the LLVM generated code and the
+arguments are all numerical values not pointers, with the exception of buffers,
+this is the most complicated function to change, and if you tried running a
+program with $Target::Debug$ enabled you will see that it's called several times
+for the same kernel. Which will make things difficult when we try to create
+our own backend.
+
+Basically it receives all the arguments necessary to run the kernel and put them
+in the kernel call, after all arguments are set it runs the kernel.
+
+\subsubsection{halide\_copy\_to\_host}
+
+It checks if the $buffer\_t$ attribute $dev\_dirty$ is true, if it is it calls 
+$halide\_opencl\_copy\_to\_host$. 
+
+\subsubsection{halide\_opencl\_copy\_to\_host} 
+
+The function that actually copy the buffer back from the device, it's really
+similar to copy\_to\_device.
+
+\subsubsection{halide\_opencl\_device\_release} 
+
+Releases the context and everything in it.
+
+With the most important runtime functions defined, let's get to work.
+
+\subsection{Halide overridden}
+
+In this part we can use the last example that we created using AoT and GPU, the
+only difference will be a new file called "runtime.c" and an modification when
+compiling the program (not the pipeline).
+
+\lstinputlisting[caption={runtime.c}]{./codes/run.c}
+
+In this file we are changing the last runtime function that is called by Halide
+$halide\_opencl\_device\_release$, note the $extern "C"$ before the function
+name. We won't make any relevant changes now just print a simple message to see
+if it worked.
+
+\lstsetmake
+\lstinputlisting[linerange={8-10}]{./codes/make_run}
+
+When compiling we just need to add our new runtime when creating our program and
+the compiler will handle the rest.
+
+\subsection{OpenCL backend}
+
+Now we have all the necessary knowledge to use Halide to create a kernel and
+mimic Halide's host behavior, so it's time to override the runtime and use all the
+information that it receives to create an OpenCL host and kernel source without
+any dependency with Halide. We will show the code and then explain each part and
+why it was necessary. Along with some problems that we encountered.
+
+\begin{figure}[H]
+\centering
+\includegraphics[height=11cm,width=0.6\textwidth]{code_gen_hacked}
+\caption{Overridden Halide code generation flow for AoT compilation. Halide modules becomes the kernel, LLVM generates the host with several function calls that are defined in the runtime and \bold{user} runtime is compiled with everything else to generate the object, once the object is generated it will exposed the OpeCL kernel and create an OpenCL Host (Halide-free).}
+\label{fig:code_gen_hacked}
+\end{figure}
+
+\subsubsection{halide\_opencl\_initialize\_kernels}
+
+Since this function is always the first to be executed when a Halide function is
+called, our new file will be created in here. Two files are manipulated through
+this function's body, first is the kernel source that we receive as an string
+argument from Halide and in second the initialization of our OpenCL host source
+code, we provide as well a header were the auxiliary functions called within the
+new host file are defined.
+
+The initialization creates the context, a command queue, compile and build
+the kernel source generated by Halide. All kernel initialization change will
+be made in this function, for example if we are using Picasso it would be
+necessary to change the kernel's compilation to use the binary generated
+by Picasso itself and build the GPU program with it, you can see an example in its
+documentation \cite{website:picasso}. 
+\lstsetclang
+\lstinputlisting[linerange={35-124}]{./codes/runtime.c}
+
+\subsubsection{halide\_copy\_to\_device }
+
+With everything initialized it's time to allocate and copy input and output
+buffers, this function is not opencl specific but actually select which
+"feature" will be used, be it CUDA, OpenCV or OpenCL. This function is changed
+because in the original a wrapper around device memory pointers are created
+and this solution avoids it because that would make the runtime dependent of
+Halide and we would like it to be more free.
+
+It's important to note that now during the buffer initialization all input 
+buffers need the 'host\_dirty' attribute set as true or else they will not be
+copied to the GPU, also the 'dev' attribute must be NULL if we didn't allocate
+memory in the device or else we will copy information to a non-existent memory
+space.
+
+\lstsetclang
+\lstinputlisting[linerange={242-254}]{./codes/runtime.c}
+
+\subsubsection{halide\_opencl\_device\_malloc} 
+
+When a buffer needs to be instantiated in the device this function is called,
+here a buffer\_t structure is declared, the input's data is copied to a
+"Input\_Buf\#.dat" file and a initialization function is set. Here we actually
+create a buffer in the device so we can keep track of which buffer is which
+when setting the kernel up.
+
+\lstsetclang
+\lstinputlisting[linerange={148-222}]{./codes/runtime.c}
+
+\subsubsection{halide\_opencl\_copy\_to\_device} 
+
+With the 'host\_dirty' set this function creates a call for an auxiliary copy
+function already written in our new header file generated in the initialization
+function. 
+
+\lstsetclang
+\lstinputlisting[linerange={224-240}]{./codes/runtime.c}
+
+\subsubsection{halide\_opencl\_run} \label{sec:cl_run_runtime}
+
+Here is the biggest challenge, if you try to run big Halide programs and see the
+debug information it's possible to see hundreds of kernel calls of the same
+kernel (some kernel source file have more than one kernel), how a host file can
+be created without making several clSetKernelArg calls for each time it's called
+and generating 30000+ lines of code? How to access and parse through the data
+sent in 'args[]'? 
+
+If we follow the Halide way of calling this function we would set each argument
+and run the kernel, and for each call of this function we would do the
+same, but usually a kernel is called several times with little to
+almost no change in the argument values, and usually the arguments that change
+follow a loop pattern, for example, one variable `x' increases by one until it's
+equal 20 then change back to 0 and increases another variable `y' until it's also
+20 and then we finish all kernel calls. We could wrap those in two loops and
+send the count variables as argument with all the constant arguments as well,
+saving us a lot of memory and lines of code, this is the ideal solution,
+in section \ref{sec:example} we can see that the only argument that change in that
+kernel call is the first one and it follows the loop pattern that we explained. 
+
+When we get to this function we assume that all the buffers are allocated in the device and
+we know all their attributes, starting from this point we only have to worry
+about how many times a kernel is executed, this is simple to solve we just check
+the kernel name if it is equal to the last time it was called we increase a
+counter and when the name changes we print the kernel and it's arguments inside
+a loop and start counting for the new kernel. Doing this we also need to change
+$halide\_copy\_to\_host$ to print the last kernel because we can't identify
+which call is the last. We haven't encountered during our test the same kernel,
+but with different buffers, been called again but this could be possible.
+
+With everything inside a loop we can start looking at the arguments, the first
+thing is simply make a copy of the arguments into another variable or structure
+and use it inside the loop, but the variable arguments can cause some problems,
+we would need to identify their patterns and use to generate the loop or loops
+depending in how many dimensions were unrolled in the optimization.
+
+Ok, let us assume that the arguments are identified, now we
+only need to identify which ones are buffers, luckily Halide send that
+information to us, unluckily it only sends the buffer's address on the GPU. But
+since we know all the buffers we can search for it looking inside the $dev$
+attribute. This seems simple but sometimes we receive NULL buffers and
+sometimes we can't find the buffer that we are looking for even though we have its value.
+We still don't know if Halide creates intermediate buffers to hold information
+and we are not allocating those because of the overridden functions or if
+there is some problems when saving the kernel arguments for later use and the
+debug information is hard to read when there is thousands of operations.
+
+Also from experience we could see that most of the arguments come from buffers
+attributes, if somehow we could trace back each attribute to its owner we could
+save some memory in our application, we wouldn't need to define new variables
+to hold the values, and if everything fails we could use a crude
+solution in which we would store all arguments in a matrix and call them later,
+but the biggest problem is finding the buffers correctly.
+
+This is the main part of our solution hope it helps understanding the code.
+Enjoy!
+
+\lstsetclang
+\lstinputlisting[linerange={308-383}]{./codes/runtime.c}
+
+\subsubsection{halide\_copy\_to\_host} 
+
+This isn't a FSF but it has to be changed because it would validate a Halide
+wrapper structure, and since this solution doesn't use it a few modification
+were necessary, so now only a simple check is made for the 'dev\_dirty'
+attribute and if it is true (usually set automatically by Halide after a
+kernel run), the runtime will create a code that copy a buffer back to it's
+host. 
+
+\lstsetclang
+\lstinputlisting[linerange={256-262}]{./codes/runtime.c}
+
+\subsubsection{halide\_opencl\_copy\_to\_host} \label{sec:cl_copy_host_runtime}
+
+This function creates the last kernel and a call for an auxiliary function in the header,
+in some big programs it isn't called, omitting the last kernel from the solution,
+maybe changing it for the $halide\_copy\_to\_host$ function will solve the problem.
+
+With this we have changed the runtime to behave like an backend for OpenCL C,
+it's also possible to do the same thing with CUDA changing the FSF for it.
+
+\lstsetclang
+\lstinputlisting[linerange={271-306}]{./codes/runtime.c}
+
+\subsection{TODO List}
+
+\begin{itemize}
+	\item Find why buffers are not being found. (Section \ref{sec:cl_run_runtime})
+	\item Find why in some big programs $halide\_opencl\_copy\_to\_host$ isn't called. (Section \ref{sec:cl_copy_host_runtime})
+	\item Find a way to manage the kernel arguments. (Section \ref{sec:cl_run_runtime})
+\end{itemize}
+
+\printbibliography
+\end{document}

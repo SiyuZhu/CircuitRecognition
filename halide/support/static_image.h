@@ -1,0 +1,181 @@
+// This header defines a simple Image class which wraps a buffer_t. This is
+// useful when interacting with a statically-compiled Halide pipeline emitted by
+// Func::compileToFile, when you do not want to link your processing program
+// against Halide.h/libHalide.a.
+
+#ifndef _STATIC_IMAGE_H
+#define _STATIC_IMAGE_H
+
+#include <stdint.h>
+#include <memory>
+#include <limits>
+#include <stdlib.h>
+
+#ifndef BUFFER_T_DEFINED
+#define BUFFER_T_DEFINED
+#include <stdint.h>
+typedef struct buffer_t {
+    uint64_t dev;
+    uint8_t* host;
+    int32_t extent[4];
+    int32_t stride[4];
+    int32_t min[4];
+    int32_t elem_size;
+    bool host_dirty;
+    bool dev_dirty;
+} buffer_t;
+#endif
+
+extern "C" void halide_copy_to_host(void *user_context, buffer_t* buf);
+
+template<typename T>
+class Image {
+    struct Contents {
+        Contents(buffer_t b, uint8_t* a) : buf(b), ref_count(1), alloc(a) {}
+        buffer_t buf;
+        int ref_count;
+        uint8_t *alloc;
+        ~Contents() {
+            delete[] alloc;
+        }
+    };
+
+    Contents *contents;
+
+    void initialize(int w, int h, int c) {
+        buffer_t buf;
+        buf.extent[0] = w;
+        buf.extent[1] = h;
+        buf.extent[2] = c;
+        buf.extent[3] = 1;
+        buf.stride[0] = 1;
+        buf.stride[1] = w;
+        buf.stride[2] = w*h;
+        buf.stride[3] = 0;
+        buf.min[0] = 0;
+        buf.min[1] = 0;
+        buf.min[2] = 0;
+        buf.min[3] = 0;
+        buf.elem_size = sizeof(T);
+
+        uint8_t *ptr = new uint8_t[sizeof(T)*w*h*c+32];
+        buf.host = ptr;
+        buf.host_dirty = false;
+        buf.dev_dirty = false;
+        buf.dev = 0;
+        while ((size_t)buf.host & 0x1f) buf.host++;
+        contents = new Contents(buf, ptr);
+    }
+
+public:
+    Image() : contents(NULL) {
+    }
+
+    Image(int w, int h = 1, int c = 1) {
+        initialize(w, h, c);
+    }
+
+    Image(const Image &other) : contents(other.contents) {
+        if (contents) {
+            contents->ref_count++;
+        }
+    }
+
+    ~Image() {
+        if (contents) {
+            contents->ref_count--;
+            if (contents->ref_count == 0) {
+                delete contents;
+                contents = NULL;
+            }
+        }
+    }
+
+    Image &operator=(const Image &other) {
+        Contents *p = other.contents;
+        if (p) {
+            p->ref_count++;
+        }
+        if (contents) {
+            contents->ref_count--;
+            if (contents->ref_count == 0) {
+                delete contents;
+                contents = NULL;
+            }
+        }
+        contents = p;
+        return *this;
+    }
+
+    T *data() {return (T*)contents->buf.host;}
+
+    void set_host_dirty(bool dirty = true) {
+        // If you use data directly, you must also call this so that
+        // gpu-side code knows that it needs to copy stuff over.
+        contents->buf.host_dirty = dirty;
+    }
+
+    void copy_to_host() {
+        if (contents->buf.dev_dirty) {
+            halide_copy_to_host(NULL, &contents->buf);
+            contents->buf.dev_dirty = false;
+        }
+    }
+
+    Image(T vals[]) {
+        initialize(sizeof(vals)/sizeof(T), 1, 1);
+        for (int i = 0; i < sizeof(vals); i++) (*this)(i, 0, 0) = vals[i];
+    }
+
+    void copy(T* vals, int width, int height) {
+        assert(contents && "Copying into an uninitialized image");
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < height; x++) {
+                (*this)(x, y, 0) = vals[y * width + x];
+            }
+        }
+    }
+
+    /** Make sure you've called copy_to_host before you start
+     * accessing pixels directly. */
+    T &operator()(int x, int y = 0, int c = 0) {
+        T *ptr = (T *)contents->buf.host;
+        int w = contents->buf.extent[0];
+        int h = contents->buf.extent[1];
+        return ptr[(c*h + y)*w + x];
+    }
+
+    /** Make sure you've called copy_to_host before you start
+     * accessing pixels directly */
+    const T &operator()(int x, int y = 0, int c = 0) const {
+        const T *ptr = (const T *)contents->buf.host;
+        return ptr[c*contents->buf.stride[2] + y*contents->buf.stride[1] + x*contents->buf.stride[0]];
+    }
+
+    operator buffer_t *() const {
+        return &(contents->buf);
+    }
+
+    int width() const {
+        return contents->buf.extent[0];
+    }
+
+    int height() const {
+        return contents->buf.extent[1];
+    }
+
+    int channels() const {
+        return contents->buf.extent[2];
+    }
+
+    int stride(int dim) const {
+        return contents->buf.stride[dim];
+    }
+
+    int size(int dim) const {
+        return contents->buf.extent[dim];
+    }
+
+};
+
+#endif //_STATIC_IMAGE_H
